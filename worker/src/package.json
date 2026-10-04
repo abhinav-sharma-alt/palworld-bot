@@ -1,0 +1,8 @@
+{
+  "name": "palworld-discord-bot",
+  "private": true,
+  "type": "module",
+  "scripts": { "deploy": "wrangler deploy" },
+  "dependencies": { "tweetnacl": "^1.0.3" },
+  "devDependencies": { "wrangler": "^4" }
+}

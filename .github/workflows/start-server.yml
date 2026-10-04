@@ -1,0 +1,218 @@
+name: Start Palworld Server
+
+on:
+  workflow_dispatch:
+    inputs:
+      world:
+        description: 'World name (config + saves live in worlds/<name>/)'
+        required: true
+        default: 'default'
+
+concurrency:
+  group: palworld
+  cancel-in-progress: false
+
+jobs:
+  run-server:
+    runs-on: ubuntu-latest
+    timeout-minutes: 355   # hard limit is 360; session itself is 330 min + install/stop/commit
+    permissions:
+      contents: write
+    env:
+      WORLD: ${{ github.event.inputs.world }}
+
+    steps:
+      # Palworld binaries (~5GB) are never committed. Only worlds/<name>/ is:
+      #   meta.json            config (see example below)
+      #   SaveGames/           world data (backup/ folders stripped)
+      #   GameUserSettings.ini holds the world ID, needed to reload the same world
+      #
+      # Example worlds/default/meta.json:
+      # {
+      #   "server_name": "My Palworld",
+      #   "max_players": 16,
+      #   "server_port": 8211,
+      #   "tunnel_address": "xxxx.gl.at.ply.gg:12345",
+      #   "settings": { "ExpRate": 2.0, "DeathPenalty": "None", "bIsPvP": false }
+      # }
+      # In "settings", strings that Palworld expects quoted (ServerDescription,
+      # Region, BanListURL, PublicIP) are quoted for you; everything else is
+      # written raw. Add "server/" to .gitignore.
+      - name: Checkout repo (includes saved world)
+        uses: actions/checkout@v4
+
+      - name: Read world config
+        run: |
+          META="worlds/$WORLD/meta.json"
+          if [ -f "$META" ]; then cp "$META" /tmp/meta.json; else echo '{}' > /tmp/meta.json; fi
+          {
+            echo "SERVER_PORT=$(jq -r '.server_port // 8211' /tmp/meta.json)"
+            echo "MAX_PLAYERS=$(jq -r '.max_players // 16' /tmp/meta.json)"
+            echo "SERVER_NAME=$(jq -r '.server_name // "Palworld Server"' /tmp/meta.json)"
+            echo "TUNNEL_ADDRESS=$(jq -r '.tunnel_address // ""' /tmp/meta.json)"
+          } >> "$GITHUB_ENV"
+          if [ -z "$(jq -r '.tunnel_address // ""' /tmp/meta.json)" ]; then
+            echo "::warning::No tunnel_address in $META. Create a UDP tunnel in playit.gg pointed at local port 8211 and add its address."
+          fi
+
+      - name: Announce tunnel address
+        run: |
+          echo "### 🔌 Connect address (Palworld → Join Multiplayer Game)" >> "$GITHUB_STEP_SUMMARY"
+          echo "**${TUNNEL_ADDRESS:-not configured}**" >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Free up disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL || true
+          df -h /
+
+      - name: Install steamcmd and download Palworld dedicated server
+        run: |
+          sudo dpkg --add-architecture i386
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq lib32gcc-s1
+
+          mkdir -p "$HOME/steamcmd" && cd "$HOME/steamcmd"
+          curl -sL https://steamcdn-a.akamaihd.net/client/installer/steamcmd_linux.tar.gz | tar xz
+
+          # steamcmd is flaky on first run (self-update exits non-zero), so retry.
+          for attempt in 1 2 3 4; do
+            ./steamcmd.sh +force_install_dir "$GITHUB_WORKSPACE/server" \
+              +login anonymous +app_update 2394010 validate +quit || true
+            [ -f "$GITHUB_WORKSPACE/server/PalServer.sh" ] && break
+            echo "steamcmd attempt $attempt didn't produce PalServer.sh — retrying..."
+            sleep 5
+          done
+          [ -f "$GITHUB_WORKSPACE/server/PalServer.sh" ] || { echo "::error::Palworld server download failed."; exit 1; }
+
+          mkdir -p "$HOME/.steam/sdk64"
+          cp "$HOME/steamcmd/linux64/steamclient.so" "$HOME/.steam/sdk64/steamclient.so"
+          df -h /
+
+      - name: Restore saved world (if it exists)
+        run: |
+          W="worlds/$WORLD"
+          mkdir -p "$W" server/Pal/Saved/Config/LinuxServer
+          if [ -d "$W/SaveGames" ]; then
+            rm -rf server/Pal/Saved/SaveGames
+            cp -r "$W/SaveGames" server/Pal/Saved/SaveGames
+            echo "Restored saves from $W/SaveGames"
+          else
+            echo "No saved world yet — the server will generate a new one."
+          fi
+          if [ -f "$W/GameUserSettings.ini" ]; then
+            cp "$W/GameUserSettings.ini" server/Pal/Saved/Config/LinuxServer/GameUserSettings.ini
+          fi
+
+      - name: Write PalWorldSettings.ini from meta.json
+        env:
+          ADMIN_PASSWORD: ${{ secrets.PAL_ADMIN_PASSWORD }}
+          SERVER_PASSWORD: ${{ secrets.PAL_SERVER_PASSWORD }}
+        run: |
+          INI=server/Pal/Saved/Config/LinuxServer/PalWorldSettings.ini
+          cp server/DefaultPalWorldSettings.ini "$INI"
+
+          esc() { printf '%s' "$1" | sed 's/[&#\\]/\\&/g'; }
+          set_opt() {   # set_opt Key RawValue  (add quotes yourself for strings)
+            local k="$1" v; v=$(esc "$2")
+            if grep -qE "[(,]$k=" "$INI"; then
+              sed -i -E "s#([(,])$k=(\"[^\"]*\"|[^,)]*)#\1$k=$v#" "$INI"
+            else
+              sed -i -E "s#\)\s*\$#,$k=$v)#" "$INI"
+            fi
+          }
+
+          set_opt ServerName "\"$SERVER_NAME\""
+          set_opt ServerPassword "\"$SERVER_PASSWORD\""
+          set_opt AdminPassword "\"$ADMIN_PASSWORD\""
+          set_opt ServerPlayerMaxNum "$MAX_PLAYERS"
+          set_opt PublicPort "$SERVER_PORT"
+          set_opt RESTAPIEnabled True
+          set_opt RESTAPIPort 8212
+          set_opt RCONEnabled False
+          set_opt bIsUseBackupSaveData False
+
+          jq -r '(.settings // {}) | to_entries[] | "\(.key)\t\(.value)"' /tmp/meta.json |
+          while IFS=$'\t' read -r k v; do
+            case "$v" in true) v=True ;; false) v=False ;; esac
+            case "$k" in ServerDescription|Region|BanListURL|PublicIP) v="\"$v\"" ;; esac
+            set_opt "$k" "$v"
+          done
+          echo "PalWorldSettings.ini written ($(wc -c < "$INI") bytes)."
+
+      - name: Configure git identity for console polling
+        run: |
+          git config user.name "palworld-bot"
+          git config user.email "actions@github.com"
+          git config core.fileMode false
+
+      - name: Start playit tunnel and Palworld server
+        env:
+          DISCORD_WEBHOOK: ${{ secrets.DISCORD_WEBHOOK }}
+          PLAYIT_SECRET: ${{ secrets.PLAYIT_SECRET }}
+          ADMIN_PASSWORD: ${{ secrets.PAL_ADMIN_PASSWORD }}
+        run: |
+          chmod +x scripts/run-session.sh
+          ./scripts/run-session.sh
+
+      - name: Upload logs (for debugging failed starts)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: server-logs-${{ github.event.inputs.world }}-${{ github.run_id }}
+          path: |
+            server/server-stdout.log
+            server/Pal/Saved/Logs/*.log
+          if-no-files-found: ignore
+          retention-days: 7
+
+      - name: Commit updated world back to repo
+        if: always()
+        run: |
+          git config user.name "palworld-bot"
+          git config user.email "actions@github.com"
+          SG=server/Pal/Saved/SaveGames
+          W="worlds/$WORLD"
+          if [ -d "$SG" ] && [ -n "$(find "$SG" -name Level.sav -not -path '*/backup/*' | head -n1)" ]; then
+            mkdir -p "$W"
+            rm -rf "$W/SaveGames"
+            cp -r "$SG" "$W/SaveGames"
+            find "$W/SaveGames" -type d -name backup -prune -exec rm -rf {} +
+            cp server/Pal/Saved/Config/LinuxServer/GameUserSettings.ini "$W/GameUserSettings.ini" 2>/dev/null || true
+
+            # NEVER "git add -A" — server/ holds ~5GB of game binaries.
+            git add "$W" console/
+            git diff --staged --quiet || git commit -m "Update $WORLD world state after session"
+
+            PUSHED=false
+            for attempt in 1 2 3 4 5; do
+              if git push origin HEAD:main --quiet 2>/dev/null; then
+                PUSHED=true
+                break
+              fi
+              echo "Push attempt $attempt failed (remote moved) — rebasing onto latest main..."
+              git fetch origin main --quiet
+              if git rebase origin/main --quiet 2>/dev/null; then
+                continue
+              fi
+              echo "Rebase conflict — keeping this session's world/console data, taking remote's for everything else..."
+              for f in $(git diff --name-only --diff-filter=U); do
+                case "$f" in
+                  worlds/*|console/*) git checkout --ours -- "$f" ;;
+                  *) git checkout --theirs -- "$f" ;;
+                esac
+                git add "$f"
+              done
+              if ! GIT_EDITOR=true git rebase --continue --quiet; then
+                git rebase --abort
+                echo "::error::Could not auto-resolve a rebase conflict while saving the world."
+                break
+              fi
+            done
+
+            if [ "$PUSHED" != "true" ]; then
+              echo "::error::Failed to push the world update for $WORLD after retries. Push worlds/$WORLD manually or re-run."
+              exit 1
+            fi
+          else
+            echo "No Level.sav found — server likely never started successfully. Skipping commit."
+          fi
