@@ -1,7 +1,7 @@
 import nacl from "tweetnacl";
 
 const GITHUB_OWNER = "abhinav-sharma-alt";
-const GITHUB_REPO = "palworld-server";   // <- change to your new repo name
+const GITHUB_REPO = "palworld-bot";   // <- change to your new repo name
 const WORKFLOW_FILE = "start-server.yml";
 const COMMAND_PATH = "console/command.txt";
 const STOP_PATH = "console/stop.txt";
