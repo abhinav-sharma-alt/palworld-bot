@@ -1,0 +1,11 @@
+name: Register playit agent
+on: workflow_dispatch
+jobs:
+  register:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - run: |
+          docker run -d --net=host -e SECRET_KEY="${{ secrets.PLAYIT_SECRET }}" --name playit ghcr.io/playit-cloud/playit-agent:1.0
+          sleep 240
+          docker logs playit
