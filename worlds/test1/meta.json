@@ -1,0 +1,6 @@
+{
+  "server_name": "test1",
+  "tunnel_address": "pgsql-skip.tun.ply.gg:12595",
+  "max_players": 16,
+  "server_port": 8211
+}
