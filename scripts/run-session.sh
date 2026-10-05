@@ -59,7 +59,7 @@ echo "Starting playit.gg agent via Docker..."
 docker run -d --net=host \
   -e SECRET_KEY="$PLAYIT_SECRET" \
   --name playit-agent \
-  ghcr.io/playit-cloud/playit-agent:0.17
+  ghcr.io/playit-cloud/playit-agent:1.0
 
 sleep 5
 echo "--- playit container status ---"
@@ -148,7 +148,12 @@ graceful_stop() {
 echo "Starting Palworld server..."
 cd server
 chmod +x PalServer.sh Pal/Binaries/Linux/PalServer-Linux-Shipping 2>/dev/null || true
-./PalServer.sh -port="$SERVER_PORT" -players="$MAX_PLAYERS" \
+EXTRA_ARGS=""
+if [ "$PUBLIC_LOBBY" = "true" ]; then
+  EXTRA_ARGS="-publiclobby"
+  echo "Public lobby listing enabled (-publiclobby)."
+fi
+./PalServer.sh -port="$SERVER_PORT" -players="$MAX_PLAYERS" $EXTRA_ARGS \
   -useperfthreads -NoAsyncLoadingThread -UseMultithreadForDS >> server-stdout.log 2>&1 &
 PAL_PID=$!
 cd ..

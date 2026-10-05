@@ -1,7 +1,7 @@
 import nacl from "tweetnacl";
 
 const GITHUB_OWNER = "abhinav-sharma-alt";
-const GITHUB_REPO = "palworld-server";   // <- change to your new repo name
+const GITHUB_REPO = "palworld-bot";
 const WORKFLOW_FILE = "start-server.yml";
 const COMMAND_PATH = "console/command.txt";
 const STOP_PATH = "console/stop.txt";
@@ -38,6 +38,7 @@ async function verifyDiscordRequest(request, publicKey) {
   return { valid, body };
 }
 
+let lastGhError = "";
 const b64 = (s) => btoa(unescape(encodeURIComponent(s)));
 const unb64 = (s) => decodeURIComponent(escape(atob(s.replace(/\n/g, ""))));
 
@@ -77,6 +78,7 @@ function describeMeta(meta) {
     `• max players: \`${meta.max_players ?? 16}\``,
     `• port: \`${meta.server_port ?? 8211}\``,
     `• tunnel: \`${meta.tunnel_address || "⚠️ not set"}\``,
+    `• public listing: \`${meta.public_lobby ? "on" : "off"}\``,
     `• settings: ${settings}`,
   ].join("\n");
 }
@@ -111,6 +113,10 @@ async function putFile(env, path, text, message) {
     headers: { ...ghHeaders(env), "Content-Type": "application/json" },
     body: JSON.stringify({ message, content: b64(text), ...(sha ? { sha } : {}) }),
   });
+  if (!put.ok) {
+    const err = await put.json().catch(() => ({}));
+    lastGhError = `GitHub ${put.status}: ${err.message || "no message"} (repo: ${GITHUB_OWNER}/${GITHUB_REPO})`;
+  }
   return put.ok;
 }
 
@@ -244,6 +250,8 @@ export default {
       if (maxPlayers !== undefined) meta.max_players = maxPlayers;
       if (serverPort !== undefined) meta.server_port = serverPort;
       if (tunnel !== undefined) meta.tunnel_address = tunnel.trim();
+      const publicLobby = getOpt("public_lobby");
+      if (publicLobby !== undefined) meta.public_lobby = publicLobby;
 
       const settingsStr = getOpt("settings");
       if (settingsStr !== undefined) {
@@ -261,7 +269,7 @@ export default {
       }
 
       const ok = await putFile(env, path, JSON.stringify(meta, null, 2) + "\n", `world: ${subName} ${wname}`);
-      if (!ok) return json("❌ Failed to write meta.json — check the GitHub token/repo settings.");
+      if (!ok) return json(`❌ Failed to write meta.json.\n\`${lastGhError}\``);
       const warn = meta.tunnel_address ? "" : `\n⚠️ No tunnel address yet — set one with \`/world configure name: ${wname} tunnel_address: <your playit address>\` before \`/start\`.`;
       return json(
         `${subName === "create" ? "🟢 Created" : "🟡 Updated"} world **${wname}**:\n${describeMeta(meta)}\nStart it with \`/start world: ${wname}\`. Changes apply on the next start.${warn}`

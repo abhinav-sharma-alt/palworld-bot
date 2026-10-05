@@ -33,6 +33,7 @@ jobs:
       #   "max_players": 16,
       #   "server_port": 8211,
       #   "tunnel_address": "xxxx.gl.at.ply.gg:12345",
+      #   "public_lobby": true,   (list in the in-game community browser; needed for Xbox/Game Pass clients)
       #   "settings": { "ExpRate": 2.0, "DeathPenalty": "None", "bIsPvP": false }
       # }
       # In "settings", strings that Palworld expects quoted (ServerDescription,
@@ -50,6 +51,7 @@ jobs:
             echo "MAX_PLAYERS=$(jq -r '.max_players // 16' /tmp/meta.json)"
             echo "SERVER_NAME=$(jq -r '.server_name // "Palworld Server"' /tmp/meta.json)"
             echo "TUNNEL_ADDRESS=$(jq -r '.tunnel_address // ""' /tmp/meta.json)"
+            echo "PUBLIC_LOBBY=$(jq -r '.public_lobby // false' /tmp/meta.json)"
           } >> "$GITHUB_ENV"
           if [ -z "$(jq -r '.tunnel_address // ""' /tmp/meta.json)" ]; then
             echo "::warning::No tunnel_address in $META. Create a UDP tunnel in playit.gg pointed at local port 8211 and add its address."
@@ -126,6 +128,20 @@ jobs:
           set_opt AdminPassword "\"$ADMIN_PASSWORD\""
           set_opt ServerPlayerMaxNum "$MAX_PLAYERS"
           set_opt PublicPort "$SERVER_PORT"
+
+          # Public (community list) listing: advertise the playit tunnel, not the runner's own address.
+          if [ "$PUBLIC_LOBBY" = "true" ]; then
+            PUB_HOST="${TUNNEL_ADDRESS%:*}"; PUB_PORT="${TUNNEL_ADDRESS##*:}"
+            case "$PUB_PORT" in ''|*[!0-9]*) PUB_PORT="$SERVER_PORT" ;; esac
+            PUB_IP=$(getent ahostsv4 "$PUB_HOST" | awk '{print $1; exit}')
+            if [ -n "$PUB_IP" ]; then
+              set_opt PublicIP "\"$PUB_IP\""
+              set_opt PublicPort "$PUB_PORT"
+              echo "Public listing will advertise $PUB_IP:$PUB_PORT"
+            else
+              echo "::warning::Could not resolve $PUB_HOST to an IPv4 address; public listing may not be reachable."
+            fi
+          fi
           set_opt RESTAPIEnabled True
           set_opt RESTAPIPort 8212
           set_opt RCONEnabled False

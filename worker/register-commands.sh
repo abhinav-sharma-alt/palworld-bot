@@ -20,6 +20,7 @@ curl -sS -X PUT "$URL" \
       {"type":3,"name":"server_name","description":"Name shown in the server list","required":false},
       {"type":4,"name":"max_players","description":"Max players (1-32, default 16)","required":false,"min_value":1,"max_value":32},
       {"type":4,"name":"server_port","description":"Local UDP port (default 8211)","required":false,"min_value":1024,"max_value":65535},
+      {"type":5,"name":"public_lobby","description":"List in the in-game server browser (needed for Xbox/Game Pass)","required":false},
       {"type":3,"name":"settings","description":"Overrides, e.g. ExpRate=2,DeathPenalty=None,bIsPvP=false","required":false}]},
     {"type":1,"name":"configure","description":"Change an existing world config","options":[
       {"type":3,"name":"name","description":"World name","required":true},
@@ -27,6 +28,7 @@ curl -sS -X PUT "$URL" \
       {"type":3,"name":"server_name","description":"Name shown in the server list","required":false},
       {"type":4,"name":"max_players","description":"Max players (1-32)","required":false,"min_value":1,"max_value":32},
       {"type":4,"name":"server_port","description":"Local UDP port","required":false,"min_value":1024,"max_value":65535},
+      {"type":5,"name":"public_lobby","description":"List in the in-game server browser (needed for Xbox/Game Pass)","required":false},
       {"type":3,"name":"settings","description":"Overrides to merge; Key= (empty) removes one","required":false}]},
     {"type":1,"name":"list","description":"List worlds"}]},
   {"name":"access","description":"Manage who can use /console","options":[
